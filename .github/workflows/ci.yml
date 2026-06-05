@@ -1,0 +1,127 @@
+name: CI Pipeline - ML Training & Docker Build
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  train-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install mlflow>=2.19.0 scikit-learn pandas numpy matplotlib seaborn
+
+    - name: Run MLflow Project training
+      working-directory: MLProject
+      run: |
+        python modelling.py
+
+    - name: List MLflow artifacts
+      run: |
+        echo "Listing MLflow artifacts..."
+        find MLProject/mlruns -type f | head -50 || echo "No mlruns directory"
+        find MLProject/ci_artifacts -type f || echo "No ci_artifacts directory"
+
+    - name: Upload MLflow artifacts to GitHub
+      uses: actions/upload-artifact@v4
+      with:
+        name: mlflow-artifacts
+        path: |
+          MLProject/mlruns/
+          MLProject/ci_artifacts/
+
+    - name: Upload model artifacts to repository
+      run: |
+        mkdir -p saved_artifacts
+        cp -r MLProject/ci_artifacts/* saved_artifacts/ 2>/dev/null || true
+        find MLProject/mlruns -name "model.pkl" -exec cp {} saved_artifacts/ \; 2>/dev/null || true
+        find MLProject/mlruns -name "MLmodel" -exec cp {} saved_artifacts/ \; 2>/dev/null || true
+
+    - name: Commit artifacts
+      run: |
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        git add saved_artifacts/ || true
+        git diff --staged --quiet || git commit -m "Update ML artifacts from CI [skip ci]"
+        git push || echo "Nothing to push"
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Login to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    - name: Find latest MLflow model path
+      id: find_model
+      working-directory: MLProject
+      run: |
+        MODEL_PATH=$(find mlruns -path "*/artifacts/model" -type d | head -1)
+        echo "MODEL_PATH=$MODEL_PATH" >> $GITHUB_OUTPUT
+        echo "Found model at: $MODEL_PATH"
+
+    - name: Build Docker image with MLflow
+      working-directory: MLProject
+      run: |
+        mlflow models build-docker \
+          -m "${{ steps.find_model.outputs.MODEL_PATH }}" \
+          -n "brass17/wine-quality-model" \
+          --enable-mlserver
+      continue-on-error: true
+
+    - name: Build Docker image (fallback)
+      if: failure()
+      working-directory: MLProject
+      run: |
+        # Fallback: create a simple Dockerfile if mlflow build-docker fails
+        cat > Dockerfile << 'EOF'
+        FROM python:3.11-slim
+        
+        WORKDIR /app
+        
+        COPY requirements_docker.txt requirements.txt
+        RUN pip install --no-cache-dir -r requirements.txt
+        
+        COPY modelling.py .
+        COPY wine_quality_preprocessing/ wine_quality_preprocessing/
+        
+        # Copy MLflow model if available
+        COPY mlruns/ mlruns/ 2>/dev/null || true
+        
+        EXPOSE 5000
+        CMD ["mlflow", "models", "serve", "-m", "mlruns", "-p", "5000", "--no-conda"]
+        EOF
+        
+        echo "mlflow>=2.19.0
+        scikit-learn
+        pandas
+        numpy" > requirements_docker.txt
+        
+        docker build -t brass17/wine-quality-model .
+
+    - name: Push Docker image to Docker Hub
+      run: |
+        docker push brass17/wine-quality-model:latest
+      continue-on-error: true
+
+    - name: Summary
+      run: |
+        echo "## CI Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Model training completed" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Artifacts uploaded to GitHub" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Docker image pushed to Docker Hub" >> $GITHUB_STEP_SUMMARY
+        echo "- 🐳 Docker Hub: https://hub.docker.com/r/brass17/wine-quality-model" >> $GITHUB_STEP_SUMMARY

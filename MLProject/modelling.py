@@ -8,6 +8,9 @@ Description: Train RandomForestClassifier with MLflow logging
 
 import os
 import json
+import subprocess
+import urllib.request
+import sys
 import pandas as pd
 import numpy as np
 import matplotlib
@@ -35,12 +38,61 @@ RANDOM_STATE = 42
 CLASS_NAMES = ['class_0', 'class_1', 'class_2']
 
 
+def ensure_local_mlflow_server():
+    """Start a local MLflow server if one is not already running."""
+    tracking_uri = os.environ.get("MLFLOW_TRACKING_URI")
+    if tracking_uri and tracking_uri.startswith(("http://", "https://")):
+        return tracking_uri
+
+    server_url = "http://127.0.0.1:5000"
+    try:
+        with urllib.request.urlopen(f"{server_url}/health", timeout=2):
+            return server_url
+    except Exception:
+        pass
+
+    db_path = os.path.join(os.path.dirname(__file__), "mlflow.db")
+    artifact_root = os.path.join(os.path.dirname(__file__), "mlartifacts")
+    os.makedirs(artifact_root, exist_ok=True)
+
+    subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "mlflow",
+            "server",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "5000",
+            "--backend-store-uri",
+            f"sqlite:///{db_path}",
+            "--default-artifact-root",
+            artifact_root,
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    for _ in range(60):
+        try:
+            with urllib.request.urlopen(f"{server_url}/health", timeout=2):
+                return server_url
+        except Exception:
+            pass
+        import time
+
+        time.sleep(1)
+
+    raise RuntimeError("Local MLflow server did not start on http://127.0.0.1:5000")
+
+
 def load_preprocessed_data():
     """Load preprocessed train and test datasets."""
     X_train = pd.read_csv(os.path.join(DATA_DIR, "X_train.csv"))
     X_test = pd.read_csv(os.path.join(DATA_DIR, "X_test.csv"))
-    y_train = pd.read_csv(os.path.join(DATA_DIR, "y_train.csv")).values.ravel()
-    y_test = pd.read_csv(os.path.join(DATA_DIR, "y_test.csv")).values.ravel()
+    y_train = pd.read_csv(os.path.join(DATA_DIR, "y_train.csv")).iloc[:, 0].to_numpy(copy=True)
+    y_test = pd.read_csv(os.path.join(DATA_DIR, "y_test.csv")).iloc[:, 0].to_numpy(copy=True)
     return X_train, X_test, y_train, y_test
 
 
@@ -53,8 +105,11 @@ def train():
     X_train, X_test, y_train, y_test = load_preprocessed_data()
     print(f"Train: {X_train.shape}, Test: {X_test.shape}")
     
-    # Set MLflow (local for CI)
+    # Use DagsHub when configured, otherwise bootstrap a local MLflow server.
+    tracking_uri = ensure_local_mlflow_server()
+    mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment(EXPERIMENT_NAME)
+    print(f"MLflow tracking URI: {tracking_uri}")
     
     # Hyperparameter tuning
     param_grid = {

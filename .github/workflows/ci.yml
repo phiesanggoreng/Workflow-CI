@@ -24,9 +24,8 @@ jobs:
           pip install mlflow>=2.19.0 scikit-learn pandas numpy matplotlib seaborn
 
       - name: Run MLflow Project training
-        working-directory: MLProject
         run: |
-          python modelling.py
+          mlflow run MLProject --no-conda
 
       - name: List MLflow artifacts
         run: |

@@ -25,7 +25,7 @@ jobs:
 
       - name: Run MLflow Project training
         run: |
-          mlflow run MLProject --no-conda
+          mlflow run MLProject --env-manager=local
 
       - name: List MLflow artifacts
         run: |
@@ -102,7 +102,7 @@ jobs:
           COPY mlruns/ mlruns/ 2>/dev/null || true
 
           EXPOSE 5000
-          CMD ["mlflow", "models", "serve", "-m", "mlruns", "-p", "5000", "--no-conda"]
+          CMD ["mlflow", "models", "serve", "-m", "mlruns", "-p", "5000", "--env-manager=local"]
           EOF
 
           echo "mlflow>=2.19.0

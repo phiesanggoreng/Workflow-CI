@@ -144,8 +144,13 @@ def train():
         mlflow.log_metric("f1_weighted", f1)
         mlflow.log_metric("best_cv_score", grid_search.best_score_)
         
-        # Log model
-        mlflow.sklearn.log_model(best_model, "model")
+        # Log model (save locally then log as run artifact directory)
+        model_dir = os.path.join("ci_artifacts", "model")
+        if os.path.exists(model_dir):
+            import shutil
+            shutil.rmtree(model_dir)
+        mlflow.sklearn.save_model(best_model, model_dir)
+        mlflow.log_artifacts(model_dir, artifact_path="model")
         
         # Log confusion matrix
         artifacts_dir = "ci_artifacts"

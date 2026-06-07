@@ -24,8 +24,9 @@ jobs:
           pip install mlflow>=2.19.0 scikit-learn pandas numpy matplotlib seaborn
 
       - name: Run MLflow Project training
+        working-directory: MLProject
         run: |
-          mlflow run MLProject --env-manager=local
+          mlflow run . --env-manager=local
 
       - name: List MLflow artifacts
         run: |
